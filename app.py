@@ -8,6 +8,7 @@ from dotenv import load_dotenv          # <--- NEW IMPORT
 from detectron2.config import get_cfg
 from detectron2 import model_zoo
 from detectron2.engine import DefaultPredictor
+import base64 # Add this to your imports at the top
 
 app = Flask(__name__)
 
@@ -40,16 +41,13 @@ predictor = DefaultPredictor(cfg)
 print("EcoMask AI is online and ready!")
 
 
-# ==========================================
-# ROUTE 1: ANALYZE ONLY (DOES NOT SAVE)
-# ==========================================
 @app.route('/analyze', methods=['POST'])
 def analyze_image():
     if 'image' not in request.files:
         return jsonify({"error": "No image uploaded"}), 400
     
     file = request.files['image']
-    file_bytes = np.fromstring(file.read(), np.uint8)
+    file_bytes = np.frombuffer(file.read(), np.uint8)
     img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
     
     if img is None:
@@ -57,20 +55,62 @@ def analyze_image():
 
     outputs = predictor(img)
     instances = outputs["instances"].to("cpu")
+    
+    # Extract data
     class_ids = instances.pred_classes.tolist()
     scores = instances.scores.tolist()
+    boxes = instances.pred_boxes.tensor.tolist() # Bounding boxes
     
     class_names = ["Plastic", "Metal", "Paper", "Glass", "Bio/Unclassified"]
-    detected_items = [{"class": class_names[cid], "confidence": round(score, 2)} for cid, score in zip(class_ids, scores)]
+    detected_items = []
+
+    class_colors = [
+            (255, 255, 0), # Cyan
+            (255, 0, 255), # Magenta
+            (0, 255, 255), # Yellow
+            (0, 0, 255),   # Red
+            (0, 255, 0),   # Green (Default Bio)
+        ]
     
-    # Notice: No MongoDB code here! It just returns the answer.
+    default_color = (255, 255, 255)
+    
+    # --- DRAWING THE MASKS/BOXES ---
+    for i in range(len(class_ids)):
+        cid = class_ids[i]
+        score = scores[i]
+        box = boxes[i]
+        
+        # Determine color based on cid
+        if cid < len(class_colors):
+            bbox_color = class_colors[cid]
+        else:
+            bbox_color = default_color
+
+        label = f"{class_names[cid]} {round(score, 2)}"
+        detected_items.append({"class": class_names[cid], "confidence": round(score, 2)})
+
+        # Draw Bounding Box using the determined color
+        x1, y1, x2, y2 = map(int, box)
+        cv2.rectangle(img, (x1, y1), (x2, y2), bbox_color, 2)
+        
+        # Draw Label Background using the determined color
+        # Expand background width slightly for longer names
+        text_width = len(label) * 10 
+        cv2.rectangle(img, (x1, y1 - 20), (x1 + text_width, y1), bbox_color, -1)
+        
+        # Draw text (Always Black/Contrast on color background)
+        cv2.putText(img, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        
+    # --- ENCODE IMAGE TO BASE64 ---
+    _, buffer = cv2.imencode('.jpg', img)
+    encoded_image = base64.b64encode(buffer).decode('utf-8')
+    
     return jsonify({
         "message": "Analysis complete",
         "total_items_found": len(detected_items),
-        "items": detected_items
+        "items": detected_items,
+        "image_with_masks": encoded_image # The Base64 string
     })
-
-
 # ==========================================
 # ROUTE 2: SUBMIT REPORT (SAVES TO MONGODB)
 # ==========================================
@@ -110,4 +150,4 @@ def get_heatmap_data():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=7860)

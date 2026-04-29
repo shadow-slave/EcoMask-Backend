@@ -15,13 +15,13 @@ WORKDIR /app
 
 # 6. Copy our requirements and install them
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install --default-timeout=1000 --no-cache-dir -r requirements.txt
 
 # 7. Copy all our files (including app.py and model_final.pth) into the container
 COPY . .
 
-# 8. Expose port 5000 for the web server
-EXPOSE 5000
+# 8. Expose port 7860 for the web server
+EXPOSE 7860
 
 # 9. Start the Flask server
 CMD ["python", "app.py"]
